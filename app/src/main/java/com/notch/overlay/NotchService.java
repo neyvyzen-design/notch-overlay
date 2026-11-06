@@ -11,6 +11,8 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
+import android.graphics.RadialGradient;
+import android.graphics.Shader;
 import android.os.Build;
 import android.os.IBinder;
 import android.view.Gravity;
@@ -84,7 +86,10 @@ public class NotchService extends Service {
 
     static class NotchView extends View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint dotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint glowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Path path = new Path();
+        private final float cx, cy, dotR, glowR;
 
         NotchView(Context c, int w, int h, int e) {
             super(c);
@@ -100,11 +105,24 @@ public class NotchService extends Service {
             path.lineTo(e + w, e);
             path.quadTo(e + w, 0, e + w + e, 0);
             path.close();
+
+            // Titik hijau (posisi: 68% dari lebar notch, di tengah tinggi)
+            cx = e + w * 0.68f;
+            cy = h * 0.5f;
+            dotR = h * 0.11f;   // ukuran titik, besarkan kalau kurang kelihatan
+            glowR = h * 0.32f;  // ukuran cahaya di sekeliling titik
+            dotPaint.setColor(Color.rgb(48, 209, 88));
+            dotPaint.setStyle(Paint.Style.FILL);
+            glowPaint.setShader(new RadialGradient(cx, cy, glowR,
+                    new int[]{Color.argb(150, 48, 209, 88), Color.argb(0, 48, 209, 88)},
+                    new float[]{0.2f, 1f}, Shader.TileMode.CLAMP));
         }
 
         @Override
         protected void onDraw(Canvas canvas) {
             canvas.drawPath(path, paint);
+            canvas.drawCircle(cx, cy, glowR, glowPaint);
+            canvas.drawCircle(cx, cy, dotR, dotPaint);
         }
     }
 }
