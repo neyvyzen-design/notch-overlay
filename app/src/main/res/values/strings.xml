@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="service_desc">Menampilkan notch hitam di atas layar, termasuk di lock screen. Tidak membaca data apa pun.</string>
+</resources>

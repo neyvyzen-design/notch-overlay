@@ -1,23 +1,19 @@
 package com.notch.overlay;
 
-import android.app.Notification;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
-import android.app.Service;
+import android.accessibilityservice.AccessibilityService;
 import android.content.Context;
-import android.content.Intent;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
 import android.os.Build;
-import android.os.IBinder;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
+import android.view.accessibility.AccessibilityEvent;
 
-public class NotchService extends Service {
+public class NotchAccessibilityService extends AccessibilityService {
     private WindowManager wm;
     private View view;
 
@@ -26,24 +22,9 @@ public class NotchService extends Service {
     private static final float TINGGI = 0.095f; // tinggi notch = 9.5% lebar layar
 
     @Override
-    public IBinder onBind(Intent i) { return null; }
-
-    @Override
-    public int onStartCommand(Intent i, int f, int id) {
-        if (view == null) {
-            NotificationChannel ch = new NotificationChannel("notch", "Notch", NotificationManager.IMPORTANCE_MIN);
-            ((NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE)).createNotificationChannel(ch);
-            Notification n = new Notification.Builder(this, "notch")
-                    .setContentTitle("Notch aktif")
-                    .setSmallIcon(android.R.drawable.ic_dialog_info)
-                    .build();
-            startForeground(1, n);
-            tambahNotch();
-        }
-        return START_STICKY;
-    }
-
-    private void tambahNotch() {
+    protected void onServiceConnected() {
+        super.onServiceConnected();
+        if (view != null) return;
         int sw = getResources().getDisplayMetrics().widthPixels;
         int h = Math.round(sw * TINGGI);
         int w = Math.round(sw * LEBAR);
@@ -54,7 +35,7 @@ public class NotchService extends Service {
 
         WindowManager.LayoutParams p = new WindowManager.LayoutParams(
                 w + ear * 2, h,
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                         | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                         | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
@@ -73,8 +54,17 @@ public class NotchService extends Service {
     }
 
     @Override
+    public void onAccessibilityEvent(AccessibilityEvent event) { }
+
+    @Override
+    public void onInterrupt() { }
+
+    @Override
     public void onDestroy() {
-        if (wm != null && view != null) wm.removeView(view);
+        if (wm != null && view != null) {
+            try { wm.removeView(view); } catch (Exception e) { }
+            view = null;
+        }
         super.onDestroy();
     }
 
