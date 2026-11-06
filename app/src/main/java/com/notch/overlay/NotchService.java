@@ -1,32 +1,55 @@
 package com.notch.overlay;
 
-import android.accessibilityservice.AccessibilityService;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.Service;
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
 import android.os.Build;
+import android.os.IBinder;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
-import android.view.accessibility.AccessibilityEvent;
 
-public class NotchAccessibilityService extends AccessibilityService {
+public class NotchService extends Service {
     private WindowManager wm;
     private View view;
 
     // Ukuran notch (ubah angka ini kalau mau lebih besar/kecil)
-    private static final float LEBAR = 0.43f;   // lebar notch = 43% lebar layar
-    private static final float TINGGI = 0.095f; // tinggi notch = 9.5% lebar layar
+    private static final float LEBAR = 0.40f;        // lebar notch = 40% lebar layar
+    private static final float SKALA_TINGGI = 1.0f;  // 1.0 = sama dengan tinggi status bar
 
     @Override
-    protected void onServiceConnected() {
-        super.onServiceConnected();
-        if (view != null) return;
+    public IBinder onBind(Intent i) { return null; }
+
+    @Override
+    public int onStartCommand(Intent i, int f, int id) {
+        if (view == null) {
+            NotificationChannel ch = new NotificationChannel("notch", "Notch", NotificationManager.IMPORTANCE_MIN);
+            ((NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE)).createNotificationChannel(ch);
+            Notification n = new Notification.Builder(this, "notch")
+                    .setContentTitle("Notch aktif")
+                    .setSmallIcon(android.R.drawable.ic_dialog_info)
+                    .build();
+            startForeground(1, n);
+            tambahNotch();
+        }
+        return START_STICKY;
+    }
+
+    private void tambahNotch() {
         int sw = getResources().getDisplayMetrics().widthPixels;
-        int h = Math.round(sw * TINGGI);
+        int resId = getResources().getIdentifier("status_bar_height", "dimen", "android");
+        int sbh = resId > 0
+                ? getResources().getDimensionPixelSize(resId)
+                : Math.round(24 * getResources().getDisplayMetrics().density);
+        int h = Math.round(sbh * SKALA_TINGGI);
         int w = Math.round(sw * LEBAR);
         int ear = Math.round(h * 0.25f);
 
@@ -35,7 +58,7 @@ public class NotchAccessibilityService extends AccessibilityService {
 
         WindowManager.LayoutParams p = new WindowManager.LayoutParams(
                 w + ear * 2, h,
-                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                         | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                         | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
@@ -54,17 +77,8 @@ public class NotchAccessibilityService extends AccessibilityService {
     }
 
     @Override
-    public void onAccessibilityEvent(AccessibilityEvent event) { }
-
-    @Override
-    public void onInterrupt() { }
-
-    @Override
     public void onDestroy() {
-        if (wm != null && view != null) {
-            try { wm.removeView(view); } catch (Exception e) { }
-            view = null;
-        }
+        if (wm != null && view != null) wm.removeView(view);
         super.onDestroy();
     }
 
