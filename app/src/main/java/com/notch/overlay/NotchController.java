@@ -30,6 +30,7 @@ import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.net.TrafficStats;
 import android.os.StatFs;
 import android.os.SystemClock;
 import android.provider.Settings;
@@ -41,6 +42,7 @@ import android.view.WindowManager;
 
 import java.util.HashSet;
 import java.util.List;
+import java.util.concurrent.Executor;
 import java.util.Set;
 
 // Mengurus tampilan notch + titik indikator: dipakai oleh NotchService (overlay biasa)
@@ -106,6 +108,16 @@ final class NotchController {
     private int ringer = AudioManager.RINGER_MODE_NORMAL;
     private boolean ramKritis = false, storPenuh = false;
 
+    // status sistem (batch 3)
+    private boolean hotspot = false, roaming = false, thermalPanas = false;
+    private boolean dlAktif = false, ulAktif = false, adb = false, brMax = false, brMin = false;
+    private boolean reboot = false;
+    private long tidakStabilHingga = 0;
+    private final long[] riwayatCas = new long[4];
+    private int idxCas = 0;
+    private long rxPrev = -1, txPrev = -1, tPrev = 0;
+    private Object thermalL = null;
+
     // warna event sesaat (Wi-Fi tersambung, volume, dll): tampil sebentar lalu kembali normal
     private int flashWarna = 0;
     private int flashKedip = 0;
@@ -135,6 +147,44 @@ final class NotchController {
             } catch (Throwable t) { }
             perbaruiStatus();
             if (berjalan) h.postDelayed(this, CEK_BERKALA_MS);
+        }
+    };
+
+    // Deteksi download/upload dari laju trafik, tiap 2 detik, hanya saat layar menyala
+    private final Runnable cekTraffic = new Runnable() {
+        @Override public void run() {
+            try {
+                PowerManager pm = (PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
+                if (pm != null && pm.isInteractive()) {
+                    long rx = TrafficStats.getTotalRxBytes();
+                    long tx = TrafficStats.getTotalTxBytes();
+                    long now = SystemClock.elapsedRealtime();
+                    if (rx != TrafficStats.UNSUPPORTED && tx != TrafficStats.UNSUPPORTED
+                            && rxPrev >= 0 && now > tPrev) {
+                        long dt = now - tPrev;
+                        long rxr = (rx - rxPrev) * 1000 / dt;
+                        long txr = (tx - txPrev) * 1000 / dt;
+                        boolean dl = rxr >= 200 * 1024;
+                        boolean ul = txr >= 100 * 1024 && txr * 3 > rxr;  // abaikan ACK dari download
+                        if (dl != dlAktif || ul != ulAktif) {
+                            dlAktif = dl;
+                            ulAktif = ul;
+                            perbaruiStatus();
+                        }
+                    }
+                    rxPrev = rx;
+                    txPrev = tx;
+                    tPrev = now;
+                } else {
+                    rxPrev = -1;
+                    if (dlAktif || ulAktif) {
+                        dlAktif = false;
+                        ulAktif = false;
+                        perbaruiStatus();
+                    }
+                }
+            } catch (Throwable t) { }
+            if (berjalan) h.postDelayed(this, 2000);
         }
     };
 
@@ -208,6 +258,7 @@ final class NotchController {
             netWifi = wifi;
             netSeluler = sel;
             netVpn = c.hasTransport(NetworkCapabilities.TRANSPORT_VPN);
+            roaming = sel && !c.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_ROAMING);
             netValid = c.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
             perbaruiStatus();
         }
@@ -218,6 +269,7 @@ final class NotchController {
             netWifi = false;
             netSeluler = false;
             netVpn = false;
+            roaming = false;
             perbaruiStatus();
         }
     };
@@ -232,7 +284,22 @@ final class NotchController {
     private final BroadcastReceiver sysRx = new BroadcastReceiver() {
         @Override
         public void onReceive(Context c, Intent i) {
-            if ("android.media.VOLUME_CHANGED_ACTION".equals(i.getAction())) {
+            String a = i.getAction();
+            if (Intent.ACTION_SHUTDOWN.equals(a) || Intent.ACTION_REBOOT.equals(a)) {
+                reboot = true;
+                perbaruiStatus();
+                return;
+            }
+            if (Intent.ACTION_POWER_CONNECTED.equals(a) || Intent.ACTION_POWER_DISCONNECTED.equals(a)) {
+                catatCharger();
+                return;
+            }
+            if ("android.net.wifi.WIFI_AP_STATE_CHANGED".equals(a)) {
+                hotspot = i.getIntExtra("wifi_state", 0) == 13;  // 13 = hotspot menyala
+                perbaruiStatus();
+                return;
+            }
+            if ("android.media.VOLUME_CHANGED_ACTION".equals(a)) {
                 if (siap) flash(PUTIH, 1200, 250);
                 return;
             }
@@ -292,6 +359,48 @@ final class NotchController {
         h.removeCallbacks(flashSelesai);
         h.postDelayed(flashSelesai, ms + 50);
         perbaruiStatus();
+    }
+
+    // Charger tidak stabil: >= 4x colok/cabut dalam 20 detik
+    private void catatCharger() {
+        long now = SystemClock.uptimeMillis();
+        riwayatCas[idxCas % 4] = now;
+        idxCas++;
+        if (idxCas >= 4 && now - riwayatCas[idxCas % 4] < 20000) {
+            tidakStabilHingga = now + 15000;
+            h.removeCallbacks(flashSelesai);
+            h.postDelayed(flashSelesai, 15050);
+        }
+        perbaruiStatus();
+    }
+
+    @android.annotation.TargetApi(29)
+    private void pasangThermal() {
+        try {
+            PowerManager pm = (PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
+            PowerManager.OnThermalStatusChangedListener l = new PowerManager.OnThermalStatusChangedListener() {
+                @Override public void onThermalStatusChanged(int status) {
+                    thermalPanas = status >= PowerManager.THERMAL_STATUS_SEVERE;
+                    perbaruiStatus();
+                }
+            };
+            thermalL = l;
+            pm.addThermalStatusListener(new Executor() {
+                @Override public void execute(Runnable r) { h.post(r); }
+            }, l);
+            thermalPanas = pm.getCurrentThermalStatus() >= PowerManager.THERMAL_STATUS_SEVERE;
+        } catch (Throwable t) { }
+    }
+
+    @android.annotation.TargetApi(29)
+    private void lepasThermal() {
+        try {
+            if (thermalL != null) {
+                PowerManager pm = (PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
+                pm.removeThermalStatusListener((PowerManager.OnThermalStatusChangedListener) thermalL);
+                thermalL = null;
+            }
+        } catch (Throwable t) { }
     }
 
     private void bacaHeadset() {
@@ -358,6 +467,20 @@ final class NotchController {
             gelap = b;
         } catch (Throwable t) { }
         try {
+            boolean b = Settings.Global.getInt(ctx.getContentResolver(), Settings.Global.ADB_ENABLED, 0) == 1;
+            naik(adb, b, KUNING);
+            adb = b;
+        } catch (Throwable t) { }
+        try {
+            int v = Settings.System.getInt(ctx.getContentResolver(), Settings.System.SCREEN_BRIGHTNESS, 128);
+            boolean mx = v >= 250;
+            boolean mn = v <= 5;
+            naik(brMax, mx, PUTIH);
+            naik(brMin, mn, ABU);
+            brMax = mx;
+            brMin = mn;
+        } catch (Throwable t) { }
+        try {
             hematData = cm.getRestrictBackgroundStatus() == ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED;
         } catch (Throwable t) { }
         try {
@@ -394,6 +517,11 @@ final class NotchController {
             sf.addAction(Intent.ACTION_SCREEN_OFF);
             sf.addAction(Intent.ACTION_USER_PRESENT);
             sf.addAction("android.media.VOLUME_CHANGED_ACTION");
+            sf.addAction(Intent.ACTION_SHUTDOWN);
+            sf.addAction(Intent.ACTION_REBOOT);
+            sf.addAction(Intent.ACTION_POWER_CONNECTED);
+            sf.addAction(Intent.ACTION_POWER_DISCONNECTED);
+            sf.addAction("android.net.wifi.WIFI_AP_STATE_CHANGED");
             ctx.registerReceiver(sysRx, sf);
         } catch (Throwable t) { }
         try {
@@ -401,12 +529,17 @@ final class NotchController {
                     Settings.System.getUriFor(Settings.System.ACCELEROMETER_ROTATION), false, obs);
             ctx.getContentResolver().registerContentObserver(
                     Settings.System.getUriFor(Settings.System.SCREEN_BRIGHTNESS_MODE), false, obs);
+            ctx.getContentResolver().registerContentObserver(
+                    Settings.System.getUriFor(Settings.System.SCREEN_BRIGHTNESS), false, obs);
+            ctx.getContentResolver().registerContentObserver(
+                    Settings.Global.getUriFor(Settings.Global.ADB_ENABLED), false, obs);
         } catch (Throwable t) { }
         try { netAda = cm.getActiveNetwork() != null; } catch (Throwable t) { }
         try { cm.registerDefaultNetworkCallback(netCb, h); } catch (Throwable t) { }
         try { am.registerAudioDeviceCallback(devCb, h); } catch (Throwable t) { }
         try { cam.registerTorchCallback(torchCb, h); } catch (Throwable t) { }
-        cekBerkala.run();
+        if (Build.VERSION.SDK_INT >= 29) pasangThermal();
+        cekTraffic.run();
         pasangNotch();
         try { dmgr.registerDisplayListener(dispL, h); } catch (Throwable t) { }
         try { sp.registerOnSharedPreferenceChangeListener(prefL); } catch (Throwable t) { }
@@ -428,40 +561,44 @@ final class NotchController {
         try { sp.unregisterOnSharedPreferenceChangeListener(prefL); } catch (Throwable t) { }
         try { cam.unregisterAvailabilityCallback(camCb); } catch (Throwable t) { }
         try { am.unregisterAudioRecordingCallback(micCb); } catch (Throwable t) { }
+        if (Build.VERSION.SDK_INT >= 29) lepasThermal();
         h.removeCallbacksAndMessages(null);
         lepasNotch();
     }
 
-    // Prioritas (atas = paling dominan):
-    //  1 kamera  2 mikrofon  3 suhu tinggi  4 baterai kritis  5 baterai lemah
-    //  6 RAM kritis  7 penyimpanan hampir penuh  8 senter  9 pesawat
-    // 10 internet putus  11 Wi-Fi tanpa internet
-    // 12 warna event sesaat (Wi-Fi/data/GPS/NFC/alarm/rotasi/mode gelap/auto brightness/volume)
-    // 13 senyap/DND  14 getar  15 hemat baterai  16 hemat data  17 layar terkunci
-    // 18 VPN  19 headset  20 USB  21 mengisi (cepat/lambat)  22 penuh/standby = hijau
+    // Prioritas (atas = paling dominan). Hanya kondisi yang jarang/sementara yang boleh
+    // menimpa hijau. Kondisi yang bisa aktif berjam-jam (penyimpanan, DND, hemat baterai,
+    // VPN, USB, layar terkunci, dll) SENGAJA tidak menimpa warna standby hijau.
+    //  1 reboot  2 kamera  3 mikrofon  4 suhu tinggi  5 thermal throttling
+    //  6 baterai kritis  7 baterai lemah  8 senter  9 pesawat
+    // 10 internet putus  11 Wi-Fi tanpa internet  12 charger tidak stabil
+    // 13 warna event sesaat (4 detik)  14 roaming  15 hotspot  16 download  17 upload
+    // 18 mengisi (hijau kedip cepat/lambat)  19 penuh/standby = hijau solid
     private void perbaruiStatus() {
         int warna = HIJAU;
         int kedip = 0;
         boolean kabel = mengisi;
-        boolean event = SystemClock.uptimeMillis() < flashHingga;
+        long sekarang = SystemClock.uptimeMillis();
+        boolean event = sekarang < flashHingga;
         boolean netPutus = !netAda || (!netValid && netSeluler && !netWifi);
         boolean wifiTanpaNet = netAda && netWifi && !netValid;
 
-        if (!kameraDipakai.isEmpty()) {
+        if (reboot) {
+            warna = MERAH;
+            kedip = KEDIP_CEPAT;
+        } else if (!kameraDipakai.isEmpty()) {
             warna = MERAH;
         } else if (micAktif) {
             warna = ORANYE;
         } else if (suhuTinggi) {
             warna = ORANYE;
+        } else if (thermalPanas) {
+            warna = MERAH;
         } else if (persen < 10 && !kabel) {
             warna = MERAH;
             kedip = KEDIP_PELAN;
         } else if (persen < 20 && !kabel) {
             warna = MERAH;
-        } else if (ramKritis) {
-            warna = MERAH_MUDA;
-        } else if (storPenuh) {
-            warna = ORANYE;
         } else if (!senterNyala.isEmpty()) {
             warna = PUTIH_HANGAT;
         } else if (pesawat) {
@@ -471,25 +608,22 @@ final class NotchController {
             kedip = KEDIP_PELAN;
         } else if (wifiTanpaNet) {
             warna = ORANYE;
+        } else if (sekarang < tidakStabilHingga) {
+            warna = ORANYE;
+            kedip = KEDIP_PELAN;
         } else if (event) {
             warna = flashWarna;
             kedip = flashKedip;
-        } else if (dnd || ringer == AudioManager.RINGER_MODE_SILENT) {
+        } else if (roaming) {
             warna = UNGU;
-        } else if (ringer == AudioManager.RINGER_MODE_VIBRATE) {
-            warna = UNGU_MUDA;
-        } else if (hematBaterai) {
-            warna = KUNING_PUCAT;
-        } else if (hematData) {
-            warna = KUNING;
-        } else if (terkunci) {
-            warna = ABU;
-        } else if (netVpn) {
-            warna = BIRU_TUA;
-        } else if (headset) {
-            warna = PUTIH;
-        } else if (usb) {
-            warna = CYAN_TERANG;
+        } else if (hotspot) {
+            warna = BIRU_MUDA;
+        } else if (dlAktif) {
+            warna = CYAN;
+            kedip = KEDIP_PELAN;
+        } else if (ulAktif) {
+            warna = BIRU;
+            kedip = KEDIP_PELAN;
         } else if (kabel) {
             warna = HIJAU;
             kedip = cepat ? KEDIP_CEPAT : KEDIP_PELAN;
