@@ -11,6 +11,7 @@ import android.view.View;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.CompoundButton;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
@@ -73,6 +74,19 @@ public class MainActivity extends Activity {
         root.addView(bt);
     }
 
+    private void saklar(String label, final String key) {
+        Switch s = new Switch(this);
+        s.setText(label);
+        s.setPadding(0, dp(14), 0, dp(6));
+        s.setChecked(Cfg.get(this, key) == 1);
+        s.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override public void onCheckedChanged(CompoundButton v, boolean c) {
+                sp.edit().putInt(key, c ? 1 : 0).apply();
+            }
+        });
+        root.addView(s);
+    }
+
     private void seek(final String label, final String key, int min, int max) {
         final TextView tv = new TextView(this);
         tv.setTextSize(14);
@@ -107,8 +121,8 @@ public class MainActivity extends Activity {
         sw.setTextSize(16);
         sw.setPadding(0, dp(10), 0, dp(10));
         sw.setChecked(izinOverlay && Cfg.get(this, "on") == 1);
-        sw.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
-            @Override public void onCheckedChanged(android.widget.CompoundButton v, boolean c) {
+        sw.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override public void onCheckedChanged(CompoundButton v, boolean c) {
                 if (c) {
                     if (!Settings.canDrawOverlays(MainActivity.this)) {
                         Toast.makeText(MainActivity.this, "Izinkan 'Tampilkan di atas aplikasi lain' dulu", Toast.LENGTH_LONG).show();
@@ -149,14 +163,12 @@ public class MainActivity extends Activity {
             });
         }
 
-        teks("Tampilan", 20, true);
+        teks("Notch", 20, true);
         seek("Panjang notch (%)", "lebar", 20, 60);
         seek("Tinggi notch (%)", "tinggi", 70, 140);
         seek("Geser kiri/kanan", "geser", -100, 100);
         seek("Ukuran titik", "dotsize", 6, 20);
         seek("Posisi titik (%)", "dotpos", 50, 90);
-        seek("Transparansi kaca notifikasi (%)", "kaca", 20, 95);
-        seek("Jarak kartu notifikasi dari notch (dp)", "kartu_turun", 0, 80);
 
         teks("Warna titik", 14, false);
         final Spinner sp2 = new Spinner(this);
@@ -172,16 +184,12 @@ public class MainActivity extends Activity {
         });
         root.addView(sp2);
 
-        Switch sl = new Switch(this);
-        sl.setText("Sembunyikan notch saat landscape");
-        sl.setPadding(0, dp(16), 0, dp(8));
-        sl.setChecked(Cfg.get(this, "sembunyi") == 1);
-        sl.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
-            @Override public void onCheckedChanged(android.widget.CompoundButton v, boolean c) {
-                sp.edit().putInt("sembunyi", c ? 1 : 0).apply();
-            }
-        });
-        root.addView(sl);
+        saklar("Sembunyikan notch saat landscape", "sembunyi");
+
+        teks("Kartu notifikasi", 20, true);
+        saklar("Efek kaca (liquid glass)", "kaca_on");
+        seek("Transparansi kaca (%)", "kaca", 20, 95);
+        seek("Jarak kartu dari notch (dp)", "kartu_turun", 0, 80);
 
         teks("Uji coba", 20, true);
         tombol("Tes animasi notifikasi", new Runnable() {

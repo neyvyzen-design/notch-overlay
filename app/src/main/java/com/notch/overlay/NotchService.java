@@ -1,5 +1,8 @@
 package com.notch.overlay;
 
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.animation.TimeInterpolator;
 import android.animation.ValueAnimator;
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -37,9 +40,7 @@ import android.view.Gravity;
 import android.view.Surface;
 import android.view.View;
 import android.view.WindowManager;
-import android.view.animation.AccelerateInterpolator;
-import android.view.animation.DecelerateInterpolator;
-import android.view.animation.OvershootInterpolator;
+import android.view.animation.AccelerateDecelerateInterpolator;
 
 import java.util.HashSet;
 import java.util.List;
@@ -287,8 +288,14 @@ public class NotchService extends Service {
                 int cardW = Math.round(curSisi * 0.90f);
                 int viewH = cardTop + cardH + Math.round(6 * curDens);
 
+                int wNotch = Math.round(curSisi * Cfg.get(this, "lebar") / 100f)
+                        + 2 * Math.round(curHH * 0.25f);
+                float sx0 = Math.min(1f, Math.max(0.2f, (float) wNotch / cardW));
+                float sy0 = Math.min(1f, Math.max(0.2f, (float) curHH / cardH));
+
                 KartuView k = new KartuView(this, cardW, cardTop, cardH,
-                        Cfg.get(this, "kaca"), curDens, l1, l2, ikon);
+                        Cfg.get(this, "kaca"), curDens, l1, l2, ikon,
+                        Cfg.get(this, "kaca_on") == 1, sx0, sy0);
 
                 WindowManager.LayoutParams p = new WindowManager.LayoutParams(
                         cardW, viewH,
@@ -420,9 +427,30 @@ public class NotchService extends Service {
         }
     }
 
-    // ===================== KARTU NOTIFIKASI (liquid glass) =====================
+    // ===================== Interpolator pegas (spring) ala iOS =====================
+    static class PegasInterpolator implements TimeInterpolator {
+        private final float zeta, omega, omegaD;
+
+        PegasInterpolator(float zeta, float omega) {
+            this.zeta = zeta;
+            this.omega = omega;
+            this.omegaD = (float) (omega * Math.sqrt(1.0 - zeta * zeta));
+        }
+
+        @Override
+        public float getInterpolation(float t) {
+            if (t <= 0f) return 0f;
+            if (t >= 1f) return 1f;
+            double e = Math.exp(-zeta * omega * t);
+            double v = 1.0 - e * (Math.cos(omegaD * t) + (zeta * omega / omegaD) * Math.sin(omegaD * t));
+            return (float) v;
+        }
+    }
+
+    // ===================== KARTU NOTIFIKASI (liquid glass + morph dari notch) =====================
     static class KartuView extends View {
-        private final float L, T, R, B, r, cardH, cardTop, dens;
+        private final float L, T, R, B, r, cardH, cardTop, dens, sx0, sy0;
+        private final boolean kacaOn;
         private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint blob = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint hi = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -439,13 +467,19 @@ public class NotchService extends Service {
         private Drawable ikon;
         private String l1, l2;
         private boolean sedangKeluar = false;
+        private float p = 0f;
+        private float konten = 0f;
+        private ValueAnimator anim;
 
         KartuView(Context c, int viewW, int cardTop, int cardH, int opas, float dens,
-                  String l1, String l2, Drawable ikon) {
+                  String l1, String l2, Drawable ikon, boolean kacaOn, float sx0, float sy0) {
             super(c);
             this.cardTop = cardTop;
             this.cardH = cardH;
             this.dens = dens;
+            this.kacaOn = kacaOn;
+            this.sx0 = sx0;
+            this.sy0 = sy0;
             this.l1 = l1 == null ? "" : l1;
             this.l2 = l2 == null ? "" : l2;
             this.ikon = ikon;
@@ -460,21 +494,26 @@ public class NotchService extends Service {
             rectHi.set(L + dens * 5f, T + dens * 2.5f, R - dens * 5f, T + cardH * 0.5f);
             float sw = dens * 1.3f;
             rectRim.set(rect.left + sw / 2f, rect.top + sw / 2f, rect.right - sw / 2f, rect.bottom - sw / 2f);
-
-            int aTop = Math.min(255, Math.round(255 * op * 0.92f));
-            int aBot = Math.min(255, Math.round(255 * op));
-            fill.setShader(new LinearGradient(0f, T, 0f, B,
-                    Color.argb(aTop, 62, 66, 78), Color.argb(aBot, 14, 16, 22),
-                    Shader.TileMode.CLAMP));
-            hi.setShader(new LinearGradient(0f, rectHi.top, 0f, rectHi.bottom,
-                    0x4DFFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP));
-            blob.setShader(new RadialGradient(L + cardH * 0.8f, T + cardH * 0.15f, cardH * 1.3f,
-                    0x38FFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP));
             rim.setStyle(Paint.Style.STROKE);
             rim.setStrokeWidth(sw);
-            rim.setShader(new LinearGradient(L, T, R, B,
-                    new int[]{0xD8FFFFFF, 0x1CFFFFFF, 0x80FFFFFF},
-                    new float[]{0f, 0.5f, 1f}, Shader.TileMode.CLAMP));
+
+            if (kacaOn) {
+                int aTop = Math.min(255, Math.round(255 * op * 0.92f));
+                int aBot = Math.min(255, Math.round(255 * op));
+                fill.setShader(new LinearGradient(0f, T, 0f, B,
+                        Color.argb(aTop, 62, 66, 78), Color.argb(aBot, 14, 16, 22),
+                        Shader.TileMode.CLAMP));
+                hi.setShader(new LinearGradient(0f, rectHi.top, 0f, rectHi.bottom,
+                        0x4DFFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP));
+                blob.setShader(new RadialGradient(L + cardH * 0.8f, T + cardH * 0.15f, cardH * 1.3f,
+                        0x38FFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP));
+                rim.setShader(new LinearGradient(L, T, R, B,
+                        new int[]{0xD8FFFFFF, 0x1CFFFFFF, 0x80FFFFFF},
+                        new float[]{0f, 0.5f, 1f}, Shader.TileMode.CLAMP));
+            } else {
+                fill.setColor(Color.argb(240, 22, 22, 26));
+                rim.setColor(0x33FFFFFF);
+            }
 
             ring.setStyle(Paint.Style.STROKE);
             ring.setStrokeWidth(dens);
@@ -493,80 +532,114 @@ public class NotchService extends Service {
 
             setPivotX(R / 2f);
             setPivotY(T);
+            terapkan(0f);
+        }
+
+        // v = 0 : sebesar notch di atas layar, v = 1 : kartu penuh (v > 1 = pantulan pegas)
+        private void terapkan(float v) {
+            p = v;
+            setScaleX(sx0 + (1f - sx0) * v);
+            setScaleY(sy0 + (1f - sy0) * v);
+            setTranslationY(-cardTop * (1f - v));
+            setAlpha(Math.max(0f, Math.min(1f, v * 3f)));
+            konten = Math.max(0f, Math.min(1f, (v - 0.6f) / 0.3f));
+            invalidate();
+        }
+
+        private void jalankan(float dari, float ke, long durasi, TimeInterpolator ti) {
+            if (anim != null) anim.cancel();
+            anim = ValueAnimator.ofFloat(dari, ke);
+            anim.setDuration(durasi);
+            anim.setInterpolator(ti);
+            anim.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+                @Override public void onAnimationUpdate(ValueAnimator a) {
+                    terapkan((Float) a.getAnimatedValue());
+                }
+            });
+            anim.start();
         }
 
         void masuk() {
-            setAlpha(0f);
-            setScaleX(0.55f);
-            setScaleY(0.55f);
-            setTranslationY(-cardTop * 0.85f);
-            animate().alpha(1f).scaleX(1f).scaleY(1f).translationY(0f)
-                    .setDuration(420)
-                    .setInterpolator(new OvershootInterpolator(1.1f))
-                    .start();
+            sedangKeluar = false;
+            terapkan(0f);
+            jalankan(0f, 1f, 700, new PegasInterpolator(0.72f, 13f));
         }
 
         void keluar(final Runnable selesai) {
             sedangKeluar = true;
-            animate().alpha(0f).scaleX(0.7f).scaleY(0.7f).translationY(-cardTop * 0.6f)
-                    .setDuration(300)
-                    .setInterpolator(new AccelerateInterpolator(1.2f))
-                    .withEndAction(new Runnable() {
-                        @Override public void run() {
-                            if (sedangKeluar) selesai.run();
-                        }
-                    })
-                    .start();
+            if (anim != null) anim.cancel();
+            anim = ValueAnimator.ofFloat(p, 0f);
+            anim.setDuration(340);
+            anim.setInterpolator(new AccelerateDecelerateInterpolator());
+            anim.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+                @Override public void onAnimationUpdate(ValueAnimator a) {
+                    terapkan((Float) a.getAnimatedValue());
+                }
+            });
+            anim.addListener(new AnimatorListenerAdapter() {
+                @Override public void onAnimationEnd(Animator a) {
+                    if (sedangKeluar) selesai.run();
+                }
+            });
+            anim.start();
         }
 
         void update(String a, String b, Drawable ic) {
             sedangKeluar = false;
+            if (anim != null) anim.cancel();
             l1 = a == null ? "" : a;
             l2 = b == null ? "" : b;
             ikon = ic;
-            invalidate();
-            animate().cancel();
-            setScaleX(0.96f);
-            setScaleY(0.96f);
-            animate().alpha(1f).scaleX(1f).scaleY(1f).translationY(0f)
-                    .setDuration(220)
-                    .setInterpolator(new DecelerateInterpolator())
-                    .start();
+            jalankan(Math.min(p, 0.85f), 1f, 450, new PegasInterpolator(0.65f, 14f));
+        }
+
+        @Override
+        protected void onDetachedFromWindow() {
+            super.onDetachedFromWindow();
+            if (anim != null) anim.cancel();
         }
 
         @Override
         protected void onDraw(Canvas canvas) {
-            // kaca: isi, pantulan cahaya, kilau atas, bingkai tepi
             canvas.drawRoundRect(rect, r, r, fill);
-            canvas.drawRoundRect(rect, r, r, blob);
-            canvas.drawRoundRect(rectHi, r, r, hi);
+            if (kacaOn) {
+                canvas.drawRoundRect(rect, r, r, blob);
+                canvas.drawRoundRect(rectHi, r, r, hi);
+            }
             canvas.drawRoundRect(rectRim, r, r, rim);
 
-            // ikon app (atau lambang) di kiri
+            if (konten <= 0.01f) return;
+            int ala = (int) (255 * konten);
+
             float s = cardH * 0.56f;
             float ix = L + cardH * 0.22f;
             float iy = T + (cardH - s) / 2f;
             float cxi = ix + s / 2f;
             float cyi = iy + s / 2f;
+            ring.setAlpha((int) (102 * konten));
             if (ikon != null) {
                 canvas.save();
                 lingkaran.reset();
                 lingkaran.addCircle(cxi, cyi, s / 2f, Path.Direction.CW);
                 canvas.clipPath(lingkaran);
+                ikon.setAlpha(ala);
                 ikon.setBounds(Math.round(ix), Math.round(iy), Math.round(ix + s), Math.round(iy + s));
                 ikon.draw(canvas);
                 canvas.restore();
                 canvas.drawCircle(cxi, cyi, s / 2f, ring);
             } else {
+                ringFill.setAlpha((int) (51 * konten));
                 canvas.drawCircle(cxi, cyi, s / 2f, ringFill);
                 canvas.drawCircle(cxi, cyi, s / 2f, ring);
+                glyph.setAlpha(ala);
                 String g = l1.startsWith("\u266A") ? "\u266A" : "N";
                 canvas.drawText(g, cxi, cyi - (glyph.ascent() + glyph.descent()) / 2f, glyph);
             }
 
-            // teks
             float tx = ix + s + cardH * 0.2f;
             float avail = R - tx - cardH * 0.3f;
+            tp1.setAlpha(ala);
+            tp2.setAlpha(ala);
             if (l1.length() > 0) {
                 if (l2.length() > 0) {
                     canvas.drawText(TextUtils.ellipsize(l1, tp1, avail, TextUtils.TruncateAt.END).toString(),
