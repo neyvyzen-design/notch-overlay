@@ -6,7 +6,7 @@ final class Cfg {
     static final String PREF = "notch";
     static final int[] WARNA = {0xFF30D158, 0xFF0A84FF, 0xFFFF453A, 0xFFFFD60A, 0xFFFFFFFF};
     static final String[] NAMA_WARNA = {"Hijau", "Biru", "Merah", "Kuning", "Putih"};
-    static final String[] KUNCI_TAMPILAN = {"lebar", "tinggi", "geser", "dotsize", "dotpos", "warna", "sembunyi"};
+    static final String[] KUNCI_TAMPILAN = {"lebar", "tinggi", "geser", "dotsize", "dotpos", "warna", "sembunyi", "kaca", "kartu_turun"};
 
     static int def(String k) {
         switch (k) {
@@ -18,6 +18,8 @@ final class Cfg {
             case "dotpos": return 80;
             case "warna": return 0;
             case "sembunyi": return 0;
+            case "kaca": return 60;
+            case "kartu_turun": return 12;
             default: return 0;
         }
     }

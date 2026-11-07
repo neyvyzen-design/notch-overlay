@@ -10,13 +10,16 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.LinearGradient;
 import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PixelFormat;
 import android.graphics.RadialGradient;
+import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.hardware.camera2.CameraManager;
 import android.hardware.display.DisplayManager;
 import android.media.AudioManager;
@@ -34,7 +37,9 @@ import android.view.Gravity;
 import android.view.Surface;
 import android.view.View;
 import android.view.WindowManager;
+import android.view.animation.AccelerateInterpolator;
 import android.view.animation.DecelerateInterpolator;
+import android.view.animation.OvershootInterpolator;
 
 import java.util.HashSet;
 import java.util.List;
@@ -49,14 +54,29 @@ public class NotchService extends Service {
     private AudioManager am;
     private SharedPreferences sp;
     private NotchView view;
+    private KartuView kartu;
     private int rot = -1;
     private boolean mulai = false;
     private boolean micAktif = false;
+    private int curSB, curHH, curSisi, curMode;
+    private float curDens = 1f;
     private final Set<String> kameraDipakai = new HashSet<String>();
     private final Handler h = new Handler(Looper.getMainLooper());
 
     private final Runnable bangunUlang = new Runnable() {
         @Override public void run() { pasangNotch(); }
+    };
+
+    private final Runnable tutupKartu = new Runnable() {
+        @Override public void run() {
+            final KartuView k = kartu;
+            if (k == null) return;
+            k.keluar(new Runnable() {
+                @Override public void run() {
+                    if (kartu == k) lepasKartu();
+                }
+            });
+        }
     };
 
     private final SharedPreferences.OnSharedPreferenceChangeListener prefL =
@@ -98,12 +118,16 @@ public class NotchService extends Service {
         }
     };
 
-    static void tampilkan(final String a, final String b, final long ms) {
+    static void tampilkan(String a, String b, long ms) {
+        tampilkan(a, b, ms, null);
+    }
+
+    static void tampilkan(final String a, final String b, final long ms, final String pkg) {
         final NotchService s = instance;
         if (s == null) return;
         s.h.post(new Runnable() {
             @Override public void run() {
-                if (s.view != null) s.view.tampil(a, b, ms);
+                if (s.mulai) s.tampilKartu(a, b, ms, pkg);
             }
         });
     }
@@ -158,58 +182,78 @@ public class NotchService extends Service {
         }
     }
 
+    private void lepasKartu() {
+        h.removeCallbacks(tutupKartu);
+        if (kartu != null) {
+            try { wm.removeView(kartu); } catch (Throwable t) { }
+            kartu = null;
+        }
+    }
+
+    private void hitungDasar() {
+        Display d = dmgr.getDisplay(Display.DEFAULT_DISPLAY);
+        rot = d.getRotation();
+        DisplayMetrics dm = new DisplayMetrics();
+        d.getRealMetrics(dm);
+        curDens = dm.density;
+        curSisi = Math.min(dm.widthPixels, dm.heightPixels);
+        curMode = 0;
+        if (rot == Surface.ROTATION_90) curMode = 1;
+        else if (rot == Surface.ROTATION_270) curMode = 2;
+        int resId = getResources().getIdentifier("status_bar_height", "dimen", "android");
+        curSB = resId > 0
+                ? getResources().getDimensionPixelSize(resId)
+                : Math.round(24 * curDens);
+        curHH = Math.max(8, Math.round(curSB * Cfg.get(this, "tinggi") / 100f));
+    }
+
+    private void aturCutout(WindowManager.LayoutParams p) {
+        if (Build.VERSION.SDK_INT >= 30) {
+            p.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
+        } else if (Build.VERSION.SDK_INT >= 28) {
+            p.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+        }
+    }
+
+    private int flagOverlay() {
+        return WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED;
+    }
+
     private void pasangNotch() {
         lepasNotch();
+        lepasKartu();
         try {
-            Display d = dmgr.getDisplay(Display.DEFAULT_DISPLAY);
-            rot = d.getRotation();
-            DisplayMetrics dm = new DisplayMetrics();
-            d.getRealMetrics(dm);
-            int sisiPendek = Math.min(dm.widthPixels, dm.heightPixels);
+            hitungDasar();
+            if (curMode != 0 && Cfg.get(this, "sembunyi") == 1) return;
 
-            // mode 0 = atas tengah, 1 = kiri (landscape), 2 = kanan (landscape)
-            int mode = 0;
-            if (rot == Surface.ROTATION_90) mode = 1;
-            else if (rot == Surface.ROTATION_270) mode = 2;
-            if (mode != 0 && Cfg.get(this, "sembunyi") == 1) return;
-
-            int resId = getResources().getIdentifier("status_bar_height", "dimen", "android");
-            int sbh = resId > 0
-                    ? getResources().getDimensionPixelSize(resId)
-                    : Math.round(24 * dm.density);
-            int hh = Math.max(8, Math.round(sbh * Cfg.get(this, "tinggi") / 100f));
-            int w = Math.round(sisiPendek * Cfg.get(this, "lebar") / 100f);
+            int hh = curHH;
+            int w = Math.round(curSisi * Cfg.get(this, "lebar") / 100f);
             int ear = Math.round(hh * 0.25f);
-            int wMax = Math.max(w, Math.min(Math.round(w * 1.7f), sisiPendek - 2 * ear - Math.round(8 * dm.density)));
-            int hMax = Math.round(hh * 2.0f);
-            int geser = Math.round(Cfg.get(this, "geser") * dm.density);
-
+            int geser = Math.round(Cfg.get(this, "geser") * curDens);
             float dotR = hh * Cfg.get(this, "dotsize") / 100f;
             float dotPos = Cfg.get(this, "dotpos") / 100f;
             int warna = Cfg.WARNA[Math.max(0, Math.min(Cfg.WARNA.length - 1, Cfg.get(this, "warna")))];
+            int panjang = w + 2 * ear;
 
-            int winW = wMax + 2 * ear;
-            int winH = hMax;
-
-            NotchView v = new NotchView(this, w, hh, ear, wMax, hMax, mode, warna, dotR, dotPos);
+            NotchView v = new NotchView(this, w, hh, ear, curMode, warna, dotR, dotPos);
             v.setSedangDipakai(micAktif || !kameraDipakai.isEmpty());
 
             WindowManager.LayoutParams p = new WindowManager.LayoutParams(
-                    mode == 0 ? winW : winH,
-                    mode == 0 ? winH : winW,
+                    curMode == 0 ? panjang : hh,
+                    curMode == 0 ? hh : panjang,
                     WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                            | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                            | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-                            | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                            | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-                            | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+                    flagOverlay(),
                     PixelFormat.TRANSLUCENT);
-            if (mode == 0) {
+            if (curMode == 0) {
                 p.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
                 p.x = geser;
                 p.y = 0;
-            } else if (mode == 1) {
+            } else if (curMode == 1) {
                 p.gravity = Gravity.LEFT | Gravity.CENTER_VERTICAL;
                 p.x = 0;
                 p.y = -geser;
@@ -218,15 +262,50 @@ public class NotchService extends Service {
                 p.x = 0;
                 p.y = geser;
             }
-            if (Build.VERSION.SDK_INT >= 30) {
-                p.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
-            } else if (Build.VERSION.SDK_INT >= 28) {
-                p.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
-            }
+            aturCutout(p);
             wm.addView(v, p);
             view = v;
         } catch (Throwable t) {
             view = null;
+        }
+    }
+
+    private void tampilKartu(String l1, String l2, long ms, String pkg) {
+        try {
+            if (curSB == 0) hitungDasar();
+            Drawable ikon = null;
+            if (pkg != null) {
+                try { ikon = getPackageManager().getApplicationIcon(pkg); } catch (Throwable t) { }
+            }
+            h.removeCallbacks(tutupKartu);
+            if (kartu != null) {
+                kartu.update(l1, l2, ikon);
+            } else {
+                int extra = Math.round(Cfg.get(this, "kartu_turun") * curDens);
+                int cardTop = (curMode == 0 ? curHH : 0) + extra;
+                int cardH = Math.round(curSB * 2.0f);
+                int cardW = Math.round(curSisi * 0.90f);
+                int viewH = cardTop + cardH + Math.round(6 * curDens);
+
+                KartuView k = new KartuView(this, cardW, cardTop, cardH,
+                        Cfg.get(this, "kaca"), curDens, l1, l2, ikon);
+
+                WindowManager.LayoutParams p = new WindowManager.LayoutParams(
+                        cardW, viewH,
+                        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                        flagOverlay(),
+                        PixelFormat.TRANSLUCENT);
+                p.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+                p.x = (curMode == 0) ? Math.round(Cfg.get(this, "geser") * curDens) : 0;
+                p.y = 0;
+                aturCutout(p);
+                wm.addView(k, p);
+                kartu = k;
+                k.masuk();
+            }
+            h.postDelayed(tutupKartu, ms);
+        } catch (Throwable t) {
+            kartu = null;
         }
     }
 
@@ -238,48 +317,55 @@ public class NotchService extends Service {
         try { cam.unregisterAvailabilityCallback(camCb); } catch (Throwable t) { }
         try { am.unregisterAudioRecordingCallback(micCb); } catch (Throwable t) { }
         h.removeCallbacksAndMessages(null);
+        lepasKartu();
         lepasNotch();
         super.onDestroy();
     }
 
+    // ===================== NOTCH (bentuk tetap + titik) =====================
     static class NotchView extends View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint dotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint glowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final TextPaint tp1 = new TextPaint(Paint.ANTI_ALIAS_FLAG);
-        private final TextPaint tp2 = new TextPaint(Paint.ANTI_ALIAS_FLAG);
         private final Path path = new Path();
-        private final Matrix m = new Matrix();
-        private final int w, h, e, wMax, hMax;
-        private final float winW, winH, dotR, glowR, dotPos;
-
-        private float prog = 0f;
+        private final float cx, cy, dotR, glowR;
         private float kedip = 1f;
         private boolean dipakai = false;
-        private String l1 = "";
-        private String l2 = "";
-        private ValueAnimator animProg;
         private ValueAnimator animKedip;
-        private final Runnable tutup = new Runnable() {
-            @Override public void run() { animasiKe(0f); }
-        };
 
-        NotchView(Context c, int w, int h, int e, int wMax, int hMax, int mode,
-                  int warna, float dotR, float dotPos) {
+        NotchView(Context c, int w, int h, int e, int mode, int warna, float dotR, float dotPos) {
             super(c);
-            this.w = w;
-            this.h = h;
-            this.e = e;
-            this.wMax = wMax;
-            this.hMax = hMax;
             this.dotR = dotR;
-            this.dotPos = dotPos;
             this.glowR = dotR * 2.9f;
-            this.winW = wMax + 2f * e;
-            this.winH = hMax;
 
             paint.setColor(Color.BLACK);
             paint.setStyle(Paint.Style.FILL);
+
+            float r = h * 0.6f;
+            path.moveTo(0, 0);
+            path.quadTo(e, 0, e, e);
+            path.lineTo(e, h - r);
+            path.quadTo(e, h, e + r, h);
+            path.lineTo(e + w - r, h);
+            path.quadTo(e + w, h, e + w, h - r);
+            path.lineTo(e + w, e);
+            path.quadTo(e + w, 0, e + w + e, 0);
+            path.close();
+
+            float[] pt = { e + w * dotPos, h * 0.5f };
+            Matrix m = new Matrix();
+            float panjang = w + 2f * e;
+            if (mode == 1) {
+                m.postRotate(-90);
+                m.postTranslate(0, panjang);
+            } else if (mode == 2) {
+                m.postRotate(90);
+                m.postTranslate(h, 0);
+            }
+            path.transform(m);
+            m.mapPoints(pt);
+            this.cx = pt[0];
+            this.cy = pt[1];
 
             dotPaint.setColor(warna | 0xFF000000);
             dotPaint.setStyle(Paint.Style.FILL);
@@ -287,42 +373,6 @@ public class NotchService extends Service {
             glowPaint.setShader(new RadialGradient(0f, 0f, glowR,
                     new int[]{(150 << 24) | rgb, rgb},
                     new float[]{0.2f, 1f}, Shader.TileMode.CLAMP));
-
-            tp1.setColor(Color.WHITE);
-            tp1.setTextSize(h * 0.36f);
-            tp1.setTypeface(Typeface.DEFAULT_BOLD);
-            tp2.setColor(0xFFBDBDBD);
-            tp2.setTextSize(h * 0.32f);
-
-            if (mode == 1) {
-                m.postRotate(-90);
-                m.postTranslate(0, winW);
-            } else if (mode == 2) {
-                m.postRotate(90);
-                m.postTranslate(winH, 0);
-            }
-        }
-
-        void animasiKe(float target) {
-            if (animProg != null) animProg.cancel();
-            animProg = ValueAnimator.ofFloat(prog, target);
-            animProg.setDuration(target > prog ? 280 : 240);
-            animProg.setInterpolator(new DecelerateInterpolator());
-            animProg.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
-                @Override public void onAnimationUpdate(ValueAnimator a) {
-                    prog = (Float) a.getAnimatedValue();
-                    invalidate();
-                }
-            });
-            animProg.start();
-        }
-
-        void tampil(String a, String b, long ms) {
-            l1 = a == null ? "" : a;
-            l2 = b == null ? "" : b;
-            removeCallbacks(tutup);
-            animasiKe(1f);
-            postDelayed(tutup, ms);
         }
 
         void setSedangDipakai(boolean b) {
@@ -353,67 +403,181 @@ public class NotchService extends Service {
         @Override
         protected void onDetachedFromWindow() {
             super.onDetachedFromWindow();
-            if (animProg != null) animProg.cancel();
             if (animKedip != null) animKedip.cancel();
-            removeCallbacks(tutup);
         }
 
         @Override
         protected void onDraw(Canvas canvas) {
-            float wc = w + (wMax - w) * prog;
-            float hc = h + (hMax - h) * prog;
-            float left = (winW - (wc + 2f * e)) / 2f;
-            float xl = left + e;
-            float xr = left + e + wc;
-            float r = Math.min(h * 0.6f + (hc - h) * 0.35f, wc / 2f);
-
-            path.reset();
-            path.moveTo(left, 0);
-            path.quadTo(xl, 0, xl, e);
-            path.lineTo(xl, hc - r);
-            path.quadTo(xl, hc, xl + r, hc);
-            path.lineTo(xr - r, hc);
-            path.quadTo(xr, hc, xr, hc - r);
-            path.lineTo(xr, e);
-            path.quadTo(xr, 0, xr + e, 0);
-            path.close();
-
-            canvas.save();
-            canvas.concat(m);
             canvas.drawPath(path, paint);
+            int al = (int) (255 * kedip);
+            glowPaint.setAlpha(al);
+            dotPaint.setAlpha(al);
+            canvas.save();
+            canvas.translate(cx, cy);
+            canvas.drawCircle(0f, 0f, glowR, glowPaint);
+            canvas.restore();
+            canvas.drawCircle(cx, cy, dotR, dotPaint);
+        }
+    }
 
-            float da = Math.max(0f, 1f - prog * 2.5f);
-            if (da > 0f) {
-                float cx = xl + wc * dotPos;
-                float cy = h * 0.5f;
-                int al = (int) (255 * da * kedip);
-                glowPaint.setAlpha(al);
-                dotPaint.setAlpha(al);
+    // ===================== KARTU NOTIFIKASI (liquid glass) =====================
+    static class KartuView extends View {
+        private final float L, T, R, B, r, cardH, cardTop, dens;
+        private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint blob = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint hi = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint rim = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint ring = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint ringFill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint glyph = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final TextPaint tp1 = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+        private final TextPaint tp2 = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF rect = new RectF();
+        private final RectF rectHi = new RectF();
+        private final RectF rectRim = new RectF();
+        private final Path lingkaran = new Path();
+        private Drawable ikon;
+        private String l1, l2;
+        private boolean sedangKeluar = false;
+
+        KartuView(Context c, int viewW, int cardTop, int cardH, int opas, float dens,
+                  String l1, String l2, Drawable ikon) {
+            super(c);
+            this.cardTop = cardTop;
+            this.cardH = cardH;
+            this.dens = dens;
+            this.l1 = l1 == null ? "" : l1;
+            this.l2 = l2 == null ? "" : l2;
+            this.ikon = ikon;
+            float op = opas / 100f;
+            L = 0f;
+            R = viewW;
+            T = cardTop;
+            B = cardTop + cardH;
+            r = cardH * 0.46f;
+
+            rect.set(L + dens, T, R - dens, B);
+            rectHi.set(L + dens * 5f, T + dens * 2.5f, R - dens * 5f, T + cardH * 0.5f);
+            float sw = dens * 1.3f;
+            rectRim.set(rect.left + sw / 2f, rect.top + sw / 2f, rect.right - sw / 2f, rect.bottom - sw / 2f);
+
+            int aTop = Math.min(255, Math.round(255 * op * 0.92f));
+            int aBot = Math.min(255, Math.round(255 * op));
+            fill.setShader(new LinearGradient(0f, T, 0f, B,
+                    Color.argb(aTop, 62, 66, 78), Color.argb(aBot, 14, 16, 22),
+                    Shader.TileMode.CLAMP));
+            hi.setShader(new LinearGradient(0f, rectHi.top, 0f, rectHi.bottom,
+                    0x4DFFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP));
+            blob.setShader(new RadialGradient(L + cardH * 0.8f, T + cardH * 0.15f, cardH * 1.3f,
+                    0x38FFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP));
+            rim.setStyle(Paint.Style.STROKE);
+            rim.setStrokeWidth(sw);
+            rim.setShader(new LinearGradient(L, T, R, B,
+                    new int[]{0xD8FFFFFF, 0x1CFFFFFF, 0x80FFFFFF},
+                    new float[]{0f, 0.5f, 1f}, Shader.TileMode.CLAMP));
+
+            ring.setStyle(Paint.Style.STROKE);
+            ring.setStrokeWidth(dens);
+            ring.setColor(0x66FFFFFF);
+            ringFill.setStyle(Paint.Style.FILL);
+            ringFill.setColor(0x33FFFFFF);
+            glyph.setColor(Color.WHITE);
+            glyph.setTextAlign(Paint.Align.CENTER);
+            glyph.setTextSize(cardH * 0.3f);
+
+            tp1.setColor(Color.WHITE);
+            tp1.setTextSize(cardH * 0.24f);
+            tp1.setTypeface(Typeface.DEFAULT_BOLD);
+            tp2.setColor(0xFFD0D0D0);
+            tp2.setTextSize(cardH * 0.20f);
+
+            setPivotX(R / 2f);
+            setPivotY(T);
+        }
+
+        void masuk() {
+            setAlpha(0f);
+            setScaleX(0.55f);
+            setScaleY(0.55f);
+            setTranslationY(-cardTop * 0.85f);
+            animate().alpha(1f).scaleX(1f).scaleY(1f).translationY(0f)
+                    .setDuration(420)
+                    .setInterpolator(new OvershootInterpolator(1.1f))
+                    .start();
+        }
+
+        void keluar(final Runnable selesai) {
+            sedangKeluar = true;
+            animate().alpha(0f).scaleX(0.7f).scaleY(0.7f).translationY(-cardTop * 0.6f)
+                    .setDuration(300)
+                    .setInterpolator(new AccelerateInterpolator(1.2f))
+                    .withEndAction(new Runnable() {
+                        @Override public void run() {
+                            if (sedangKeluar) selesai.run();
+                        }
+                    })
+                    .start();
+        }
+
+        void update(String a, String b, Drawable ic) {
+            sedangKeluar = false;
+            l1 = a == null ? "" : a;
+            l2 = b == null ? "" : b;
+            ikon = ic;
+            invalidate();
+            animate().cancel();
+            setScaleX(0.96f);
+            setScaleY(0.96f);
+            animate().alpha(1f).scaleX(1f).scaleY(1f).translationY(0f)
+                    .setDuration(220)
+                    .setInterpolator(new DecelerateInterpolator())
+                    .start();
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            // kaca: isi, pantulan cahaya, kilau atas, bingkai tepi
+            canvas.drawRoundRect(rect, r, r, fill);
+            canvas.drawRoundRect(rect, r, r, blob);
+            canvas.drawRoundRect(rectHi, r, r, hi);
+            canvas.drawRoundRect(rectRim, r, r, rim);
+
+            // ikon app (atau lambang) di kiri
+            float s = cardH * 0.56f;
+            float ix = L + cardH * 0.22f;
+            float iy = T + (cardH - s) / 2f;
+            float cxi = ix + s / 2f;
+            float cyi = iy + s / 2f;
+            if (ikon != null) {
                 canvas.save();
-                canvas.translate(cx, cy);
-                canvas.drawCircle(0f, 0f, glowR, glowPaint);
+                lingkaran.reset();
+                lingkaran.addCircle(cxi, cyi, s / 2f, Path.Direction.CW);
+                canvas.clipPath(lingkaran);
+                ikon.setBounds(Math.round(ix), Math.round(iy), Math.round(ix + s), Math.round(iy + s));
+                ikon.draw(canvas);
                 canvas.restore();
-                canvas.drawCircle(cx, cy, dotR, dotPaint);
+                canvas.drawCircle(cxi, cyi, s / 2f, ring);
+            } else {
+                canvas.drawCircle(cxi, cyi, s / 2f, ringFill);
+                canvas.drawCircle(cxi, cyi, s / 2f, ring);
+                String g = l1.startsWith("\u266A") ? "\u266A" : "N";
+                canvas.drawText(g, cxi, cyi - (glyph.ascent() + glyph.descent()) / 2f, glyph);
             }
 
-            if (prog > 0.55f && l1.length() > 0) {
-                float ta = Math.min(1f, (prog - 0.55f) / 0.45f);
-                int ala = (int) (255 * ta);
-                float tx = xl + h * 0.55f;
-                float avail = wc - h * 1.1f;
-                tp1.setAlpha(ala);
-                tp2.setAlpha(ala);
+            // teks
+            float tx = ix + s + cardH * 0.2f;
+            float avail = R - tx - cardH * 0.3f;
+            if (l1.length() > 0) {
                 if (l2.length() > 0) {
                     canvas.drawText(TextUtils.ellipsize(l1, tp1, avail, TextUtils.TruncateAt.END).toString(),
-                            tx, hc * 0.42f, tp1);
+                            tx, T + cardH * 0.43f, tp1);
                     canvas.drawText(TextUtils.ellipsize(l2, tp2, avail, TextUtils.TruncateAt.END).toString(),
-                            tx, hc * 0.80f, tp2);
+                            tx, T + cardH * 0.75f, tp2);
                 } else {
                     canvas.drawText(TextUtils.ellipsize(l1, tp1, avail, TextUtils.TruncateAt.END).toString(),
-                            tx, hc * 0.60f, tp1);
+                            tx, T + cardH * 0.60f, tp1);
                 }
             }
-            canvas.restore();
         }
     }
 }

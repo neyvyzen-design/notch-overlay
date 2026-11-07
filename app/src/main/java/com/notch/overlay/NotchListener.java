@@ -136,7 +136,7 @@ public class NotchListener extends NotificationListenerService {
             if (judul == null && isi == null) return;
             String l1 = judul != null ? judul.toString() : namaApp(sbn.getPackageName());
             String l2 = isi != null ? isi.toString() : "";
-            NotchService.tampilkan(l1, l2, 3000);
+            NotchService.tampilkan(l1, l2, 3500, sbn.getPackageName());
         } catch (Throwable t) { }
     }
 }

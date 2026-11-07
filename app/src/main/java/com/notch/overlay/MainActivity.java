@@ -155,6 +155,8 @@ public class MainActivity extends Activity {
         seek("Geser kiri/kanan", "geser", -100, 100);
         seek("Ukuran titik", "dotsize", 6, 20);
         seek("Posisi titik (%)", "dotpos", 50, 90);
+        seek("Transparansi kaca notifikasi (%)", "kaca", 20, 95);
+        seek("Jarak kartu notifikasi dari notch (dp)", "kartu_turun", 0, 80);
 
         teks("Warna titik", 14, false);
         final Spinner sp2 = new Spinner(this);
@@ -187,7 +189,7 @@ public class MainActivity extends Activity {
                 if (NotchService.instance == null) {
                     Toast.makeText(MainActivity.this, "Aktifkan notch dulu", Toast.LENGTH_SHORT).show();
                 } else {
-                    NotchService.tampilkan("Tes notifikasi", "Notch bekerja dengan baik", 3000);
+                    NotchService.tampilkan("Tes notifikasi", "Notch bekerja dengan baik", 3500, getPackageName());
                 }
             }
         });
