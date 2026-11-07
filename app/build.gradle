@@ -6,11 +6,28 @@ android {
         applicationId "com.notch.overlay"
         minSdk 26
         targetSdk 33
-        versionCode 4
+        // versionCode otomatis naik tiap build di GitHub (nomor run + 100),
+        // supaya Android menganggapnya update. Build lokal pakai 4.
+        def run = System.getenv("GITHUB_RUN_NUMBER")
+        versionCode run ? (run.toInteger() + 100) : 4
         versionName "2.2"
+    }
+    // Tanda tangan tetap (dari GitHub Secrets) = syarat agar APK bisa di-update tanpa uninstall
+    def ksFile = System.getenv("KEYSTORE_FILE")
+    def adaKs = ksFile && new File(ksFile).exists()
+    signingConfigs {
+        if (adaKs) {
+            notch {
+                storeFile new File(ksFile)
+                storePassword System.getenv("KS_PASS")
+                keyAlias System.getenv("KEY_ALIAS") ?: "notch"
+                keyPassword System.getenv("KS_PASS")
+            }
+        }
     }
     buildTypes {
         debug {
+            if (adaKs) signingConfig signingConfigs.notch
             debuggable false
             minifyEnabled true
             shrinkResources true

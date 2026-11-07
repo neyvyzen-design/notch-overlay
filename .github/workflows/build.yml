@@ -17,7 +17,18 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.7
+      - name: Siapkan keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/notch.jks"
+          fi
       - run: gradle assembleDebug --no-daemon
+        env:
+          KEYSTORE_FILE: ${{ runner.temp }}/notch.jks
+          KS_PASS: ${{ secrets.KS_PASS }}
+          KEY_ALIAS: notch
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ github.run_number }}
