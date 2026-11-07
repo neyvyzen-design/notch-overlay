@@ -68,7 +68,8 @@ public class NotchListener extends NotificationListenerService {
             if (key.equals(terakhir) && now - waktu < 5000) return;
             terakhir = key;
             waktu = now;
-            NotchService.tampilkan("\u266A " + t, a == null ? "" : a, 3500);
+            if (Cfg.senyapSekarang(this)) return;
+            NotchService.tampilkan("\u266A " + t, a == null ? "" : a, Cfg.get(this, "durasi") * 1000L + 500L);
         } catch (Throwable t) { }
     }
 
@@ -136,7 +137,8 @@ public class NotchListener extends NotificationListenerService {
             if (judul == null && isi == null) return;
             String l1 = judul != null ? judul.toString() : namaApp(sbn.getPackageName());
             String l2 = isi != null ? isi.toString() : "";
-            NotchService.tampilkan(l1, l2, 3500, sbn.getPackageName());
+            if (Cfg.senyapSekarang(this)) return;
+            NotchService.tampilkan(l1, l2, Cfg.get(this, "durasi") * 1000L);
         } catch (Throwable t) { }
     }
 }
