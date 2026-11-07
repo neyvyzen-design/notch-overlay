@@ -165,8 +165,8 @@ public class NotchService extends Service {
             path.quadTo(e + w, 0, e + w + e, 0);
             path.close();
 
-            // Titik hijau (68% dari lebar notch, di tengah tinggi)
-            float[] pt = { e + w * 0.68f, h * 0.5f };
+            // Titik hijau (80% dari lebar notch, di tengah tinggi)
+            float[] pt = { e + w * 0.80f, h * 0.5f };
             dotR = h * 0.11f;
             glowR = h * 0.32f;
 
