@@ -1,5 +1,6 @@
 package com.notch.overlay;
 
+import android.animation.ArgbEvaluator;
 import android.animation.ValueAnimator;
 import android.content.Context;
 import android.graphics.Canvas;
@@ -10,6 +11,7 @@ import android.graphics.Path;
 import android.graphics.RadialGradient;
 import android.graphics.Shader;
 import android.view.View;
+import android.view.animation.AccelerateDecelerateInterpolator;
 
 final class NotchView extends View {
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -17,9 +19,15 @@ final class NotchView extends View {
     private final Paint glowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path path = new Path();
     private final float cx, cy, dotR, glowR;
+
+    private int warna = 0xFF30D158;
+    private int warnaTarget = 0xFF30D158;
+    private int glowWarna = 0;
     private float kedip = 1f;
-    private boolean dipakai = false;
+    private boolean berkedip = false;
+    private ValueAnimator animWarna;
     private ValueAnimator animKedip;
+    private ValueAnimator animKembali;
 
     NotchView(Context c, int w, int h, int e, int mode, float dotR, float dotPos) {
         super(c);
@@ -55,52 +63,98 @@ final class NotchView extends View {
         this.cx = pt[0];
         this.cy = pt[1];
 
-        int hijau = 0xFF30D158;
-        dotPaint.setColor(hijau);
         dotPaint.setStyle(Paint.Style.FILL);
-        int rgb = hijau & 0x00FFFFFF;
-        glowPaint.setShader(new RadialGradient(0f, 0f, glowR,
-                new int[]{(150 << 24) | rgb, rgb},
-                new float[]{0.2f, 1f}, Shader.TileMode.CLAMP));
     }
 
-    void setSedangDipakai(boolean b) {
-        if (b == dipakai) return;
-        dipakai = b;
-        if (animKedip != null) {
-            animKedip.cancel();
-            animKedip = null;
+    // Atur warna titik dan apakah berkedip. animasi=false: langsung tanpa transisi.
+    void setStatus(int warnaBaru, boolean blink, boolean animasi) {
+        if (warnaBaru != warnaTarget || !animasi) {
+            warnaTarget = warnaBaru;
+            if (animWarna != null) {
+                animWarna.cancel();
+                animWarna = null;
+            }
+            if (!animasi) {
+                warna = warnaBaru;
+                invalidate();
+            } else {
+                animWarna = ValueAnimator.ofObject(new ArgbEvaluator(),
+                        Integer.valueOf(warna), Integer.valueOf(warnaBaru));
+                animWarna.setDuration(450);
+                animWarna.setInterpolator(new AccelerateDecelerateInterpolator());
+                animWarna.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+                    @Override public void onAnimationUpdate(ValueAnimator a) {
+                        warna = (Integer) a.getAnimatedValue();
+                        invalidate();
+                    }
+                });
+                animWarna.start();
+            }
         }
-        if (b) {
-            animKedip = ValueAnimator.ofFloat(1f, 0.15f);
-            animKedip.setDuration(550);
-            animKedip.setRepeatCount(ValueAnimator.INFINITE);
-            animKedip.setRepeatMode(ValueAnimator.REVERSE);
-            animKedip.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
-                @Override public void onAnimationUpdate(ValueAnimator a) {
-                    kedip = (Float) a.getAnimatedValue();
-                    invalidate();
-                }
-            });
-            animKedip.start();
-        } else {
-            kedip = 1f;
-            invalidate();
+
+        if (blink != berkedip || !animasi) {
+            berkedip = blink;
+            if (animKedip != null) {
+                animKedip.cancel();
+                animKedip = null;
+            }
+            if (animKembali != null) {
+                animKembali.cancel();
+                animKembali = null;
+            }
+            if (blink) {
+                animKedip = ValueAnimator.ofFloat(1f, 0.15f);
+                animKedip.setDuration(600);
+                animKedip.setRepeatCount(ValueAnimator.INFINITE);
+                animKedip.setRepeatMode(ValueAnimator.REVERSE);
+                animKedip.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+                    @Override public void onAnimationUpdate(ValueAnimator a) {
+                        kedip = (Float) a.getAnimatedValue();
+                        invalidate();
+                    }
+                });
+                animKedip.start();
+            } else if (!animasi || kedip >= 0.99f) {
+                kedip = 1f;
+                invalidate();
+            } else {
+                animKembali = ValueAnimator.ofFloat(kedip, 1f);
+                animKembali.setDuration(250);
+                animKembali.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+                    @Override public void onAnimationUpdate(ValueAnimator a) {
+                        kedip = (Float) a.getAnimatedValue();
+                        invalidate();
+                    }
+                });
+                animKembali.start();
+            }
         }
     }
 
     @Override
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
+        if (animWarna != null) animWarna.cancel();
         if (animKedip != null) animKedip.cancel();
+        if (animKembali != null) animKembali.cancel();
     }
 
     @Override
     protected void onDraw(Canvas canvas) {
         canvas.drawPath(path, paint);
+
+        if (glowWarna != warna) {
+            glowWarna = warna;
+            int rgb = warna & 0x00FFFFFF;
+            glowPaint.setShader(new RadialGradient(0f, 0f, glowR,
+                    new int[]{(150 << 24) | rgb, rgb},
+                    new float[]{0.2f, 1f}, Shader.TileMode.CLAMP));
+        }
+        dotPaint.setColor(warna | 0xFF000000);
         int al = (int) (255 * kedip);
         glowPaint.setAlpha(al);
         dotPaint.setAlpha(al);
+
         canvas.save();
         canvas.translate(cx, cy);
         canvas.drawCircle(0f, 0f, glowR, glowPaint);

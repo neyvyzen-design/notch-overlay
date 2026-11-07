@@ -1,12 +1,16 @@
 package com.notch.overlay;
 
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.graphics.PixelFormat;
 import android.hardware.camera2.CameraManager;
 import android.hardware.display.DisplayManager;
 import android.media.AudioManager;
 import android.media.AudioRecordingConfiguration;
+import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -20,9 +24,14 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-// Mengurus tampilan notch: dipakai oleh NotchService (overlay biasa)
+// Mengurus tampilan notch + titik indikator: dipakai oleh NotchService (overlay biasa)
 // dan NotchAccessibilityService (tembus control center).
 final class NotchController {
+    private static final int HIJAU = 0xFF30D158;
+    private static final int KUNING = 0xFFFFD60A;
+    private static final int MERAH_GELAP = 0xFF8B1A1A;
+    private static final int MERAH_REKAM = 0xFFFF3B30;
+
     private final Context ctx;
     private final int tipeWindow;
     private WindowManager wm;
@@ -35,6 +44,10 @@ final class NotchController {
     private int rot = -1;
     private boolean berjalan = false;
     private boolean micAktif = false;
+    private boolean mengisi = false;
+    private int persen = 100;
+    private int warnaNow = HIJAU;
+    private boolean kedipNow = false;
     private final Set<String> kameraDipakai = new HashSet<String>();
 
     private final Runnable bangunUlang = new Runnable() {
@@ -63,11 +76,11 @@ final class NotchController {
     private final CameraManager.AvailabilityCallback camCb = new CameraManager.AvailabilityCallback() {
         @Override public void onCameraAvailable(String id) {
             kameraDipakai.remove(id);
-            updateAktif();
+            perbaruiStatus();
         }
         @Override public void onCameraUnavailable(String id) {
             kameraDipakai.add(id);
-            updateAktif();
+            perbaruiStatus();
         }
     };
 
@@ -75,7 +88,20 @@ final class NotchController {
         @Override
         public void onRecordingConfigChanged(List<AudioRecordingConfiguration> configs) {
             micAktif = configs != null && !configs.isEmpty();
-            updateAktif();
+            perbaruiStatus();
+        }
+    };
+
+    private final BroadcastReceiver batRx = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context c, Intent i) {
+            int level = i.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+            int scale = i.getIntExtra(BatteryManager.EXTRA_SCALE, 100);
+            if (level >= 0 && scale > 0) persen = Math.round(level * 100f / scale);
+            int status = i.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
+            int plugged = i.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0);
+            mengisi = plugged != 0 && status != BatteryManager.BATTERY_STATUS_FULL;
+            perbaruiStatus();
         }
     };
 
@@ -92,6 +118,10 @@ final class NotchController {
     void mulai() {
         if (berjalan) return;
         berjalan = true;
+        try {
+            Intent st = ctx.registerReceiver(batRx, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+            if (st != null) batRx.onReceive(ctx, st);
+        } catch (Throwable t) { }
         pasangNotch();
         try { dmgr.registerDisplayListener(dispL, h); } catch (Throwable t) { }
         try { sp.registerOnSharedPreferenceChangeListener(prefL); } catch (Throwable t) { }
@@ -102,6 +132,7 @@ final class NotchController {
     void berhenti() {
         if (!berjalan) return;
         berjalan = false;
+        try { ctx.unregisterReceiver(batRx); } catch (Throwable t) { }
         try { dmgr.unregisterDisplayListener(dispL); } catch (Throwable t) { }
         try { sp.unregisterOnSharedPreferenceChangeListener(prefL); } catch (Throwable t) { }
         try { cam.unregisterAvailabilityCallback(camCb); } catch (Throwable t) { }
@@ -110,8 +141,25 @@ final class NotchController {
         lepasNotch();
     }
 
-    private void updateAktif() {
-        if (view != null) view.setSedangDipakai(micAktif || !kameraDipakai.isEmpty());
+    // Prioritas: merekam > mengisi daya > baterai rendah > normal
+    private void perbaruiStatus() {
+        int warna;
+        boolean kedip = false;
+        if (micAktif || !kameraDipakai.isEmpty()) {
+            warna = MERAH_REKAM;
+        } else if (mengisi) {
+            warna = HIJAU;
+            kedip = true;
+        } else if (persen <= 15) {
+            warna = MERAH_GELAP;
+        } else if (persen < 30) {
+            warna = KUNING;
+        } else {
+            warna = HIJAU;
+        }
+        warnaNow = warna;
+        kedipNow = kedip;
+        if (view != null) view.setStatus(warna, kedip, true);
     }
 
     private void lepasNotch() {
@@ -124,6 +172,7 @@ final class NotchController {
     private void pasangNotch() {
         lepasNotch();
         if (Cfg.get(ctx, "on") != 1) return;
+        perbaruiStatus();
         try {
             Display d = dmgr.getDisplay(Display.DEFAULT_DISPLAY);
             rot = d.getRotation();
@@ -150,7 +199,7 @@ final class NotchController {
             int panjang = w + 2 * ear;
 
             NotchView v = new NotchView(ctx, w, hh, ear, mode, dotR, dotPos);
-            v.setSedangDipakai(micAktif || !kameraDipakai.isEmpty());
+            v.setStatus(warnaNow, kedipNow, false);
 
             WindowManager.LayoutParams p = new WindowManager.LayoutParams(
                     mode == 0 ? panjang : hh,
