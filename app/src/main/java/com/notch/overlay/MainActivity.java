@@ -1,20 +1,20 @@
 package com.notch.overlay;
 
 import android.app.Activity;
+import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
+import android.os.PowerManager;
 import android.provider.Settings;
 import android.view.View;
-import android.widget.AdapterView;
-import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.CompoundButton;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
-import android.widget.Spinner;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -42,15 +42,10 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        if (Settings.canDrawOverlays(this) && Cfg.get(this, "on") == 1) {
+        if (Cfg.get(this, "on") == 1 && !Cfg.aksesAktif(this) && Settings.canDrawOverlays(this)) {
             startForegroundService(new Intent(this, NotchService.class));
         }
         bangun();
-    }
-
-    private boolean notifAktif() {
-        String s = Settings.Secure.getString(getContentResolver(), "enabled_notification_listeners");
-        return s != null && s.contains(getPackageName());
     }
 
     private TextView teks(String t, int size, boolean tebal) {
@@ -73,17 +68,17 @@ public class MainActivity extends Activity {
         root.addView(bt);
     }
 
-    private void saklar(String label, final String key) {
-        Switch s = new Switch(this);
-        s.setText(label);
-        s.setPadding(0, dp(14), 0, dp(6));
-        s.setChecked(Cfg.get(this, key) == 1);
-        s.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
-            @Override public void onCheckedChanged(android.widget.CompoundButton v, boolean c) {
-                sp.edit().putInt(key, c ? 1 : 0).apply();
-            }
-        });
-        root.addView(s);
+    // Buka layar pengaturan; kalau gagal, buka info aplikasi
+    private void buka(Intent utama) {
+        try {
+            startActivity(utama);
+        } catch (Throwable t) {
+            try {
+                Toast.makeText(this, "Buka manual: Info aplikasi > Mulai otomatis / Penghemat baterai", Toast.LENGTH_LONG).show();
+                startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:" + getPackageName())));
+            } catch (Throwable t2) { }
+        }
     }
 
     private void seek(final String label, final String key, int min, int max) {
@@ -113,17 +108,17 @@ public class MainActivity extends Activity {
         teks("Notch iPhone", 26, true);
 
         final boolean izinOverlay = Settings.canDrawOverlays(this);
-        boolean izinNotif = notifAktif();
+        final boolean akses = Cfg.aksesAktif(this);
 
         Switch sw = new Switch(this);
         sw.setText("Notch aktif (jalan otomatis setelah restart)");
         sw.setTextSize(16);
         sw.setPadding(0, dp(10), 0, dp(10));
-        sw.setChecked(izinOverlay && Cfg.get(this, "on") == 1);
-        sw.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
-            @Override public void onCheckedChanged(android.widget.CompoundButton v, boolean c) {
+        sw.setChecked(Cfg.get(this, "on") == 1 && (izinOverlay || akses));
+        sw.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            @Override public void onCheckedChanged(CompoundButton v, boolean c) {
                 if (c) {
-                    if (!Settings.canDrawOverlays(MainActivity.this)) {
+                    if (!Settings.canDrawOverlays(MainActivity.this) && !Cfg.aksesAktif(MainActivity.this)) {
                         Toast.makeText(MainActivity.this, "Izinkan 'Tampilkan di atas aplikasi lain' dulu", Toast.LENGTH_LONG).show();
                         startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                                 Uri.parse("package:" + getPackageName())));
@@ -131,10 +126,9 @@ public class MainActivity extends Activity {
                         return;
                     }
                     sp.edit().putInt("on", 1).apply();
-                    if (Build.VERSION.SDK_INT >= 33) {
-                        requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 1);
+                    if (!Cfg.aksesAktif(MainActivity.this)) {
+                        startForegroundService(new Intent(MainActivity.this, NotchService.class));
                     }
-                    startForegroundService(new Intent(MainActivity.this, NotchService.class));
                 } else {
                     sp.edit().putInt("on", 0).apply();
                     stopService(new Intent(MainActivity.this, NotchService.class));
@@ -143,6 +137,11 @@ public class MainActivity extends Activity {
         });
         root.addView(sw);
 
+        teks("Mode tampil: " + (akses
+                ? "Aksesibilitas (di atas control center dan lock screen)"
+                : "Overlay biasa (di bawah control center)"), 14, false);
+
+        teks("Izin dan mode", 20, true);
         teks(izinOverlay ? "\u2714 Izin overlay aktif" : "\u2718 Izin overlay belum aktif", 14, false);
         if (!izinOverlay) {
             tombol("Buka izin overlay", new Runnable() {
@@ -152,67 +151,61 @@ public class MainActivity extends Activity {
                 }
             });
         }
-        teks(izinNotif ? "\u2714 Akses notifikasi aktif (animasi notif dan musik)"
-                : "\u2718 Akses notifikasi belum aktif (perlu untuk animasi notif dan musik)", 14, false);
-        if (!izinNotif) {
-            tombol("Buka akses notifikasi", new Runnable() {
+        teks(akses ? "\u2714 Aksesibilitas aktif (tembus control center)"
+                : "\u2718 Aksesibilitas belum aktif. Aktifkan agar notch tampil di atas control center dan lock screen.", 14, false);
+        if (!akses) {
+            tombol("Buka pengaturan Aksesibilitas", new Runnable() {
                 @Override public void run() {
-                    startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
+                    startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
                 }
             });
         }
 
-        teks("Tampilan", 20, true);
+        teks("Latar belakang", 20, true);
+        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+        boolean bebas = pm.isIgnoringBatteryOptimizations(getPackageName());
+        teks(bebas ? "\u2714 Bebas dari batasan baterai" : "\u2718 Masih dibatasi optimasi baterai", 14, false);
+        if (!bebas) {
+            tombol("Bebaskan dari batasan baterai", new Runnable() {
+                @Override public void run() {
+                    try {
+                        startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                Uri.parse("package:" + getPackageName())));
+                    } catch (Throwable t) {
+                        buka(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+                    }
+                }
+            });
+        }
+        tombol("Mulai otomatis (Xiaomi/Redmi)", new Runnable() {
+            @Override public void run() {
+                Intent i = new Intent();
+                i.setComponent(new ComponentName("com.miui.securitycenter",
+                        "com.miui.permcenter.autostart.AutoStartManagementActivity"));
+                buka(i);
+            }
+        });
+        tombol("Batasan baterai app (Xiaomi/Redmi)", new Runnable() {
+            @Override public void run() {
+                Intent i = new Intent();
+                i.setComponent(new ComponentName("com.miui.powerkeeper",
+                        "com.miui.powerkeeper.ui.HiddenAppsConfigActivity"));
+                i.putExtra("package_name", getPackageName());
+                i.putExtra("package_label", "Notch iPhone");
+                buka(i);
+            }
+        });
+
+        teks("Ukuran dan posisi poni", 20, true);
         seek("Panjang notch (%)", "lebar", 20, 60);
         seek("Tinggi notch (%)", "tinggi", 70, 140);
-        seek("Geser kiri/kanan", "geser", -100, 100);
+        seek("Geser posisi kiri/kanan", "geser", -100, 100);
+
+        teks("Titik hijau", 20, true);
         seek("Ukuran titik", "dotsize", 6, 20);
         seek("Posisi titik (%)", "dotpos", 50, 90);
 
-        teks("Warna titik", 14, false);
-        final Spinner sp2 = new Spinner(this);
-        ArrayAdapter<String> ad = new ArrayAdapter<String>(this, android.R.layout.simple_spinner_item, Cfg.NAMA_WARNA);
-        ad.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        sp2.setAdapter(ad);
-        sp2.setSelection(Cfg.get(this, "warna"));
-        sp2.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
-            @Override public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
-                if (pos != Cfg.get(MainActivity.this, "warna")) sp.edit().putInt("warna", pos).apply();
-            }
-            @Override public void onNothingSelected(AdapterView<?> p) { }
-        });
-        root.addView(sp2);
-
-        Switch sl = new Switch(this);
-        sl.setText("Sembunyikan notch saat landscape");
-        sl.setPadding(0, dp(16), 0, dp(8));
-        sl.setChecked(Cfg.get(this, "sembunyi") == 1);
-        sl.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
-            @Override public void onCheckedChanged(android.widget.CompoundButton v, boolean c) {
-                sp.edit().putInt("sembunyi", c ? 1 : 0).apply();
-            }
-        });
-        root.addView(sl);
-
-        teks("Fitur tambahan", 20, true);
-        seek("Lama notifikasi tampil (detik)", "durasi", 2, 8);
-        saklar("Info baterai (mengisi, penuh, lemah)", "baterai");
-        saklar("Getar halus saat notifikasi muncul", "getar");
-        saklar("Jam tenang (notifikasi tidak muncul)", "senyap");
-        seek("Jam tenang mulai (jam)", "senyap_mulai", 0, 23);
-        seek("Jam tenang selesai (jam)", "senyap_selesai", 0, 23);
-
-        teks("Uji coba", 20, true);
-        tombol("Tes notifikasi", new Runnable() {
-            @Override public void run() {
-                if (NotchService.instance == null) {
-                    Toast.makeText(MainActivity.this, "Aktifkan notch dulu", Toast.LENGTH_SHORT).show();
-                } else {
-                    NotchService.tampilkan("Tes notifikasi", "Notch bekerja dengan baik", Cfg.get(MainActivity.this, "durasi") * 1000L);
-                }
-            }
-        });
-        tombol("Reset semua ke awal", new Runnable() {
+        tombol("Reset ukuran dan posisi", new Runnable() {
             @Override public void run() {
                 SharedPreferences.Editor e = sp.edit();
                 for (String k : Cfg.KUNCI_TAMPILAN) e.remove(k);
