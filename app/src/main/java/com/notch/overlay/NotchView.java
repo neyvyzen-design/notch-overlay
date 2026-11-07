@@ -24,7 +24,7 @@ final class NotchView extends View {
     private int warnaTarget = 0xFF30D158;
     private int glowWarna = 0;
     private float kedip = 1f;
-    private boolean berkedip = false;
+    private int berkedipMs = 0;
     private ValueAnimator animWarna;
     private ValueAnimator animKedip;
     private ValueAnimator animKembali;
@@ -67,7 +67,7 @@ final class NotchView extends View {
     }
 
     // Atur warna titik dan apakah berkedip. animasi=false: langsung tanpa transisi.
-    void setStatus(int warnaBaru, boolean blink, boolean animasi) {
+    void setStatus(int warnaBaru, int blinkMs, boolean animasi) {
         if (warnaBaru != warnaTarget || !animasi) {
             warnaTarget = warnaBaru;
             if (animWarna != null) {
@@ -92,8 +92,8 @@ final class NotchView extends View {
             }
         }
 
-        if (blink != berkedip || !animasi) {
-            berkedip = blink;
+        if (blinkMs != berkedipMs || !animasi) {
+            berkedipMs = blinkMs;
             if (animKedip != null) {
                 animKedip.cancel();
                 animKedip = null;
@@ -102,9 +102,9 @@ final class NotchView extends View {
                 animKembali.cancel();
                 animKembali = null;
             }
-            if (blink) {
+            if (blinkMs > 0) {
                 animKedip = ValueAnimator.ofFloat(1f, 0.15f);
-                animKedip.setDuration(600);
+                animKedip.setDuration(blinkMs);
                 animKedip.setRepeatCount(ValueAnimator.INFINITE);
                 animKedip.setRepeatMode(ValueAnimator.REVERSE);
                 animKedip.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {

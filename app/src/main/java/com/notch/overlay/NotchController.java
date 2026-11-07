@@ -13,6 +13,9 @@ import android.media.AudioRecordingConfiguration;
 import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Handler;
+import android.os.PowerManager;
+import android.app.NotificationManager;
+import android.provider.Settings;
 import android.os.Looper;
 import android.util.DisplayMetrics;
 import android.view.Display;
@@ -28,9 +31,14 @@ import java.util.Set;
 // dan NotchAccessibilityService (tembus control center).
 final class NotchController {
     private static final int HIJAU = 0xFF30D158;
-    private static final int KUNING = 0xFFFFD60A;
-    private static final int MERAH_GELAP = 0xFF8B1A1A;
-    private static final int MERAH_REKAM = 0xFFFF3B30;
+    private static final int MERAH = 0xFFFF3B30;
+    private static final int ORANYE = 0xFFFF9500;
+    private static final int KUNING_PUCAT = 0xFFFFF3A0;
+    private static final int UNGU = 0xFFAF52DE;
+    private static final int ABU = 0xFF8E8E93;
+    private static final int PUTIH_HANGAT = 0xFFFFE9C4;
+    private static final int KEDIP_PELAN = 1200;
+    private static final int KEDIP_NORMAL = 600;
 
     private final Context ctx;
     private final int tipeWindow;
@@ -47,7 +55,12 @@ final class NotchController {
     private boolean mengisi = false;
     private int persen = 100;
     private int warnaNow = HIJAU;
-    private boolean kedipNow = false;
+    private int kedipNow = 0;
+    private boolean suhuTinggi = false;
+    private boolean hematBaterai = false;
+    private boolean dnd = false;
+    private boolean pesawat = false;
+    private final Set<String> senterNyala = new HashSet<String>();
     private final Set<String> kameraDipakai = new HashSet<String>();
 
     private final Runnable bangunUlang = new Runnable() {
@@ -92,15 +105,56 @@ final class NotchController {
         }
     };
 
+    private final CameraManager.TorchCallback torchCb = new CameraManager.TorchCallback() {
+        @Override public void onTorchModeChanged(String id, boolean enabled) {
+            if (enabled) senterNyala.add(id); else senterNyala.remove(id);
+            perbaruiStatus();
+        }
+        @Override public void onTorchModeUnavailable(String id) {
+            senterNyala.remove(id);
+            perbaruiStatus();
+        }
+    };
+
+    private final BroadcastReceiver sysRx = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context c, Intent i) {
+            bacaStatusSistem();
+            perbaruiStatus();
+        }
+    };
+
+    private void bacaStatusSistem() {
+        try {
+            PowerManager pm = (PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
+            hematBaterai = pm != null && pm.isPowerSaveMode();
+        } catch (Throwable t) { }
+        try {
+            NotificationManager nm = (NotificationManager) ctx.getSystemService(Context.NOTIFICATION_SERVICE);
+            int f = nm != null ? nm.getCurrentInterruptionFilter() : NotificationManager.INTERRUPTION_FILTER_ALL;
+            dnd = f != NotificationManager.INTERRUPTION_FILTER_ALL
+                    && f != NotificationManager.INTERRUPTION_FILTER_UNKNOWN;
+        } catch (Throwable t) { }
+        try {
+            pesawat = Settings.Global.getInt(ctx.getContentResolver(), Settings.Global.AIRPLANE_MODE_ON, 0) == 1;
+        } catch (Throwable t) { }
+    }
+
     private final BroadcastReceiver batRx = new BroadcastReceiver() {
         @Override
         public void onReceive(Context c, Intent i) {
             int level = i.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
             int scale = i.getIntExtra(BatteryManager.EXTRA_SCALE, 100);
             if (level >= 0 && scale > 0) persen = Math.round(level * 100f / scale);
+            int suhu = i.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Integer.MIN_VALUE);
+            if (suhu != Integer.MIN_VALUE) {
+                // satuan 0.1 C; nyala di >= 42.0, mati di < 41.0 (hindari kedip-kedip)
+                if (suhu >= 420) suhuTinggi = true;
+                else if (suhu < 410) suhuTinggi = false;
+            }
             int status = i.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
             int plugged = i.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0);
-            mengisi = plugged != 0 && status != BatteryManager.BATTERY_STATUS_FULL;
+            mengisi = plugged != 0 && status != BatteryManager.BATTERY_STATUS_FULL && persen < 100;
             perbaruiStatus();
         }
     };
@@ -122,6 +176,15 @@ final class NotchController {
             Intent st = ctx.registerReceiver(batRx, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
             if (st != null) batRx.onReceive(ctx, st);
         } catch (Throwable t) { }
+        bacaStatusSistem();
+        try {
+            IntentFilter sf = new IntentFilter();
+            sf.addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED);
+            sf.addAction(NotificationManager.ACTION_INTERRUPTION_FILTER_CHANGED);
+            sf.addAction(Intent.ACTION_AIRPLANE_MODE_CHANGED);
+            ctx.registerReceiver(sysRx, sf);
+        } catch (Throwable t) { }
+        try { cam.registerTorchCallback(torchCb, h); } catch (Throwable t) { }
         pasangNotch();
         try { dmgr.registerDisplayListener(dispL, h); } catch (Throwable t) { }
         try { sp.registerOnSharedPreferenceChangeListener(prefL); } catch (Throwable t) { }
@@ -133,6 +196,8 @@ final class NotchController {
         if (!berjalan) return;
         berjalan = false;
         try { ctx.unregisterReceiver(batRx); } catch (Throwable t) { }
+        try { ctx.unregisterReceiver(sysRx); } catch (Throwable t) { }
+        try { cam.unregisterTorchCallback(torchCb); } catch (Throwable t) { }
         try { dmgr.unregisterDisplayListener(dispL); } catch (Throwable t) { }
         try { sp.unregisterOnSharedPreferenceChangeListener(prefL); } catch (Throwable t) { }
         try { cam.unregisterAvailabilityCallback(camCb); } catch (Throwable t) { }
@@ -141,21 +206,37 @@ final class NotchController {
         lepasNotch();
     }
 
-    // Prioritas: merekam > mengisi daya > baterai rendah > normal
+    // Prioritas (atas = paling dominan):
+    // kamera > mikrofon > suhu tinggi > baterai kritis > baterai lemah > senter > pesawat
+    // > jangan ganggu > hemat baterai > mengisi > baterai penuh > standby (hijau)
     private void perbaruiStatus() {
         int warna;
-        boolean kedip = false;
-        if (micAktif || !kameraDipakai.isEmpty()) {
-            warna = MERAH_REKAM;
-        } else if (mengisi) {
+        int kedip = 0;
+        boolean kabel = mengisi;
+        if (!kameraDipakai.isEmpty()) {
+            warna = MERAH;
+        } else if (micAktif) {
+            warna = ORANYE;
+        } else if (suhuTinggi) {
+            warna = ORANYE;
+        } else if (persen < 10 && !kabel) {
+            warna = MERAH;
+            kedip = KEDIP_PELAN;
+        } else if (persen < 20 && !kabel) {
+            warna = MERAH;
+        } else if (!senterNyala.isEmpty()) {
+            warna = PUTIH_HANGAT;
+        } else if (pesawat) {
+            warna = ABU;
+        } else if (dnd) {
+            warna = UNGU;
+        } else if (hematBaterai) {
+            warna = KUNING_PUCAT;
+        } else if (kabel) {
             warna = HIJAU;
-            kedip = true;
-        } else if (persen <= 15) {
-            warna = MERAH_GELAP;
-        } else if (persen < 30) {
-            warna = KUNING;
+            kedip = KEDIP_NORMAL;
         } else {
-            warna = HIJAU;
+            warna = HIJAU; // penuh (100%) = hijau solid; standby = hijau
         }
         warnaNow = warna;
         kedipNow = kedip;
