@@ -10,7 +10,7 @@ android {
         // supaya Android menganggapnya update. Build lokal pakai 4.
         def run = System.getenv("GITHUB_RUN_NUMBER")
         versionCode run ? (run.toInteger() + 100) : 4
-        versionName "2.2"
+        versionName "2.3"
     }
     // Tanda tangan tetap (dari GitHub Secrets) = syarat agar APK bisa di-update tanpa uninstall
     def ksFile = System.getenv("KEYSTORE_FILE")
